@@ -1,56 +1,68 @@
 import json
 
-from flask import Flask, render_template, jsonify, Response
-from control import set_status, get_temp, get_humid 
-import RPi.GPIO as GPIO
-from flask_security import Security, login_required, \
-     SQLAlchemySessionUserDatastore
-from database import db_session, init_db
-from models import User, Role
-from camera_pi import Camera
+from flask import Flask, request, flash, url_for, redirect, \
+     render_template, jsonify, Response, send_file
 
+from control import set_status, get_temp, get_humid, get_hour 
+import RPi.GPIO as GPIO
+
+#from camera_pi import Camera
+from camera_pi import save_image
+from celery import Celery
+from picamera import PiCamera
+
+import requests
+
+from datetime import timedelta, datetime
+from celery.schedules import crontab
+
+#camera = PiCamera()
 
 app = Flask(__name__)
 content_type_json = {'Content-Type': 'text/css; charset=utf-8'}
-app.config['DEBUG'] = True
+app.config['DEBUG'] = False
 app.config['SECRET_KEY'] = 'super-secret'
 app.config['SECURITY_PASSWORD_SALT'] = 'salt'
-
-# Setup Flask-Security
-user_datastore = SQLAlchemySessionUserDatastore(db_session,
-                                                User, Role)
-security = Security(app, user_datastore)
-
+ 
 water_pin = 17
 COB_pin = 18
 temp_hum_pin = 15
 vent_pin = 14
 
-# Celery conf
-from celery import Celery
-app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
-#app.config['CELERY_RESULT_BACKEND'] = 'redis://localhost:6379/0'
-app.config['CELERY_TIMEZONE'] = 'UTC'
+lastfile = "static/1.jpg"
 
-# execute task at certain intervals
-from datetime import timedelta
-from celery.schedules import crontab
+server_url = "https://hoog-cluster.herokuapp.com/api/"
+
+app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
+app.config['CELERY_TIMEZONE'] = 'UTC'
 app.config['CELERYBEAT_SCHEDULE'] = {
     'water-every-morning': {
         'task': 'tasks.turn_water_on',
-        'schedule': crontab(hour=10, minute=0)
+        'schedule': crontab(hour=get_hour(water_pin, True), minute=0)
     },
     'water-later': {
         'task': 'tasks.turn_water_off',
-        'schedule': crontab(hour=10, minute=1)
+        'schedule': crontab(hour=get_hour(water_pin, False), minute=1)
     },
     'COB-every-morning': {
         'task': 'tasks.turn_COB_on',
-        'schedule': crontab(hour=8, minute=0)
+        'schedule': crontab(hour=get_hour(COB_pin, True), minute=0)
     },
     'COB-later': {
         'task': 'tasks.turn_COB_off',
-        'schedule': crontab(hour=23, minute=0)
+        'schedule': crontab(hour=get_hour(COB_pin, False), minute=0)
+    },
+    'vent-every-morning': {
+        'task': 'tasks.turn_vent_on',
+        'schedule': crontab(hour=get_hour(vent_pin, True), minute=0)
+    },
+    'vent-later': {
+        'task': 'tasks.turn_vent_off',
+        'schedule': crontab(hour=get_hour(vent_pin, False), minute=0)
+    },
+    'measurements': {
+        'task': 'tasks.measurements',
+        'schedule': crontab(hour='*', minute=0)
     }
 }
 
@@ -87,18 +99,14 @@ def turn_vent_off():
     print('vent (pin 14) turned off')
     return set_status(vent_pin,GPIO.LOW)
 
+@celery.task(name='tasks.measurements')
+def measurements():
+    print('measurements taken')
+    r = requests.post(server_url , data = {'key':'value'})
+    return 124
 
-# Create a user to test with
-@app.before_first_request
-def initialise_db():
-    init_db()
-    db_session.commit()
 
-
-# Routes for manual controls
-############################
 @app.route('/')
-@login_required
 def home():
     return render_template('dashboard.html')
 
@@ -162,7 +170,32 @@ def get_vent_on():
         status=GPIO.input(vent_pin)
     )
 
+@app.route('/measurements')
+def get_measurements():
+    return jsonify(
+        vent=GPIO.input(vent_pin),
+        light=GPIO.input(COB_pin),
+        water=GPIO.input(water_pin),
 
+    )  
+
+@app.route('/schedule', methods = ['POST', 'GET'])
+def post_schedule():
+    if request.method == 'POST':
+        with open('schedule.json', 'w') as outfile:
+            json.dump(request.json, outfile)
+        
+        return jsonify(success="true")
+    else:
+        with open('schedule.json') as f:
+            data = json.load(f)
+        return jsonify(data)
+
+@app.route('/show')
+def show_all():
+    with open('schedule.json') as f:
+        data = json.load(f)
+    return jsonify(data)
 
 @app.route('/temperature')
 def get_temperature():
@@ -178,22 +211,31 @@ def get_humidity():
         humidity=humidity
     )
 
-@app.route('/video_feed')
-def video_feed():
-    return Response(gen(Camera()),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+# @app.route('/video_feed')
+# def video_feed():
+#     return Response(gen(Camera()),
+#                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/snapshot')
+def snapshot():
+    return send_file(save_image())
 
-@app.route('/create_user')
-def create_user():
-    try:
-        init_db()
-        user_datastore.create_user(email='admin', password='password')
-        db_session.commit()
-        return 'Success'
-    except:
-        db_session.rollback()
-        return 'Failed'
+@app.route("/snapshot2")
+def getImage():
+     camera.capture(lastfile)
+     camera.close()
+     return send_file(lastfile)
+
+# @app.route('/create_user')
+# def create_user():
+#     try:
+#         init_db()
+#         user_datastore.create_user(email='admin', password='password')
+#         db_session.commit()
+#         return 'Success'
+#     except:
+#         db_session.rollback()
+#         return 'Failed'
 
 if __name__ == '__main__':
     try:
@@ -201,5 +243,5 @@ if __name__ == '__main__':
         app.run(host='0.0.0.0', port=80)
     except PermissionError:
         # we're probably on the developer's machine
-        app.run(host='0.0.0.0', port=5000, debug=True)
+        app.run(host='0.0.0.0', port=5000, debug=False)
         
