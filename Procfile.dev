@@ -1,4 +1,4 @@
-#redis: redis-server
+redis: redis-server
 web: ./venv/bin/gunicorn main:app -b 0.0.0.0:5000 --chdir=src --log-level info --access-logfile=- --error-logfile=-
 worker: ./venv/bin/celery worker -A main.celery --loglevel=info --workdir=src -B
 # -B embeds the beat into the worker - if more than one worker is needed, create a separate scheduler:
