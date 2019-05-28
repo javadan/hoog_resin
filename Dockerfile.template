@@ -7,7 +7,7 @@
 # FROM resin/armv7hf-debian:latest	
 
 
-FROM resin/%%RESIN_MACHINE_NAME%%-debian
+FROM resin/%%BALENA_MACHINE_NAME%%-debian
 
 ENV INITSYSTEM on
 
