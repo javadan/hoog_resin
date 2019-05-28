@@ -1,6 +1,4 @@
 redis: redis-server
-#web: /venv/bin/python /app/main.py # development server
 web: /venv/bin/gunicorn main:app -b 0.0.0.0:80 --chdir=/app --log-level info --access-logfile=- --error-logfile=-
-worker: C_FORCE_ROOT=true /venv/bin/celery worker -A main.celery --loglevel=info --workdir=/app -B
-# -B embeds the beat into the worker - if more than one worker is needed, create a separate scheduler:
-#scheduler: C_FORCE_ROOT=true /venv/bin/celery beat -A main.celery --loglevel=info --workdir=app
+worker: C_FORCE_ROOT=true /venv/bin/celery worker -A main.celery --loglevel=debug --workdir=/app -B
+
